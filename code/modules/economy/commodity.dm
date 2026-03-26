@@ -739,6 +739,12 @@ datum/commodity/drugs/sell/poppies
 	desc = "This headset allows you to speak over a highly illegal Syndicate frequency."
 	price = PAY_DOCTORATE
 
+/datum/commodity/contraband/syndicate_radioupgrade
+	comname = "Illegal Radio Upgrade"
+	comtype = /obj/item/device/radio_upgrade/syndicatechannel
+	desc = "A device capable of upgrading a headset to allow access over the syndicate radio channel."
+	price = PAY_UNTRAINED*5
+
 /datum/commodity/contraband/briefcase
 	comname = "Briefcase Valve Assembly"
 	comtype = /obj/item/device/transfer_valve/briefcase
