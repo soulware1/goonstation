@@ -8,7 +8,7 @@
 /mob/verb/say_verb(message as text)
 	set name = "say"
 	// death to DM, trying to allow emotes to go through
-	if (!src.can_use_say and not findtext(message,"*",1,1)))
+	if (!src.can_use_say && !(findtext(message,"*",1,2)))
 		boutput(src, SPAN_ALERT("You can not speak!"))
 		return
 
