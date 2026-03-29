@@ -365,7 +365,7 @@ ADMIN_INTERACT_PROCS(/obj/item/ghostboard, proc/admin_command_speak)
 		return words
 
 	Click(location,control,params)
-		if(isobserver(usr) || iswraith(usr) || isAIeye(usr)) //explicitly added AIeye because AIeye is no longer dead and AI's are ghosts trapped in metal boxes.
+		if(isobserver(usr) || iswraith(usr) || isAIeye(usr) || islivingobject(usr)) //explicitly added AIeye because AIeye is no longer dead and AI's are ghosts trapped in metal boxes.
 			if(isAIeye(usr))
 				boutput(usr, SPAN_NOTICE("Whoa, you can use this as an AI? Are you actually just a ghost trapped in a metal box??"))
 
