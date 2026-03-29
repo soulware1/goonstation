@@ -338,6 +338,12 @@
 	get_hud()
 		return src.hud
 
+/mob/living/object/proc/specific_emotes(var/act, var/param = null, var/voluntary = 0)
+	return null
+
+/mob/living/object/proc/specific_emote_type(var/act)
+	return 1
+
 /mob/living/object/emote(var/act, var/voluntary = 0)
 	..()
 	var/param = null
