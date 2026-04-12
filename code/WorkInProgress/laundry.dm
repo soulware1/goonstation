@@ -1,384 +1,653 @@
-#define PRE 0
-#define WASH "w"
-#define DRY "d"
-#define POST 1
-#define CYCLE_TIME_MOB_INSIDE 5
-#define CYCLE_TIME 10
+//TODO: let living objects use special attacks that would be cool as hell
+/obj/item/attackdummy
+	name = "attack dummy"
+	hit_type = DAMAGE_BLUNT
+	force = 5
+	throwforce = 5
 
-TYPEINFO(/obj/submachine/laundry_machine)
-	mats = 20
+/mob/living/object
+	name = "living object"
+	var/obj/possessed_thing //possessed thing which is PROBABLY an object. We error out in New() if it isn't.
+	var/obj/item/possessed_item //if the possessed thing is an item, this var is set to it.
+	var/mob/owner //mob who's driving this. makkes sense for wraiths, but humans can also get stuffed in. very silly.
+	var/obj/item/attackdummy/dummy //dummy attack, used for non-items so they have something to slap people with
+	var/datum/hud/object/hud
+	density = 0
+	canmove = 1
+	use_stamina = FALSE
+	flags = NO_MOUSEDROP_QOL
+	gender = NEUTER
 
-/obj/submachine/laundry_machine
-	name = "laundry machine"
-	desc = "A combined washer/dryer unit used for cleaning clothes."
-	icon = 'icons/obj/janitor.dmi'
-	icon_state = "laundry"
-	anchored = ANCHORED
-	density = 1
-	deconstruct_flags = DECON_WELDER | DECON_WRENCH
-	var/on = 0
-	var/open = 0
-	var/cycle = PRE
-	var/cycle_current = 0
-	var/cycle_max = CYCLE_TIME
-	var/mob/occupant = null
-	var/mob/activator = null
-	var/image/image_door = null
-	var/image/image_light = null
-	//var/image/image_panel = null
-	var/load_max = 12
-	var/HTML = null
-	///oh no
-	var/has_brick = FALSE
+	blinded = FALSE
+	anchored = UNANCHORED
+	a_intent = "disarm"
+	can_bleed = FALSE
+	var/name_prefix = "living "
 
-/obj/submachine/laundry_machine/New()
-	..()
-	src.UpdateIcon()
+	faction = list(FACTION_WRAITH)
 
-/obj/submachine/laundry_machine/disposing()
-	src.unload()
-	src.activator = null
-	src.occupant = null
-	..()
+	ailment_immune = TRUE
 
-/obj/submachine/laundry_machine/update_icon()
-	ENSURE_IMAGE(src.image_door, src.icon, "laundry[src.open]")
-	src.UpdateOverlays(src.image_door, "door")
+	New(var/atom/loc, var/obj/possessed, var/mob/controller)
+		..(loc)
 
-	if (src.contents.len)
-		if (src.cycle == PRE)
-			src.icon_state = "laundry-p"
-			src.UpdateOverlays(null, "light")
-		else if (src.cycle == POST)
-			src.icon_state = "laundry-d0"
-			src.UpdateOverlays(null, "light")
+		if (isitem(possessed))
+			src.possessed_item = possessed
+		src.possessed_thing = possessed
+
+		src.hud = new(src)
+		src.attach_hud(hud)
+		src.zone_sel = new(src)
+		src.attach_hud(zone_sel)
+
+		if (src.possessed_item)
+			src.possessed_item.cant_drop = TRUE
+			src.max_health = 25 * src.possessed_item.w_class
+			src.health = 25 * src.possessed_item.w_class
+			src.combat_click_delay = max(possessed_item.click_delay, possessed_item.combat_click_delay)
 		else
-			src.icon_state = "laundry-[src.cycle][src.on]"
-			if (src.on)
-				ENSURE_IMAGE(src.image_light, src.icon, "laundry-[src.cycle]light")
-				src.UpdateOverlays(src.image_light, "light")
+			if (isobj(possessed_thing))
+				src.dummy = new /obj/item/attackdummy(src)
+				src.dummy.name = possessed_thing.name
+				src.dummy.cant_drop = TRUE
+				src.max_health = 100
+				src.health = 100
 			else
-				src.UpdateOverlays(null, "light")
-	else
-		src.icon_state = "laundry"
-		src.UpdateOverlays(null, "light")
+				stack_trace("Tried to create a possessed object from invalid thing [identify_object(src)]!")
+				boutput(controller, "<h3 class='alert'>Uh oh, you tried to possess something illegal! Here's a toolbox instead!</h3>")
+				src.possessed_thing = new /obj/item/storage/toolbox/artistic
 
-/obj/submachine/laundry_machine/proc/process()
-	if (!src.contents.len || !src.on) // somehow there's nothing in the machine or it's turned off somehow, whoops!
-		processing_items.Remove(src)
-		src.visible_message("[src] lets out a grumpy buzz!")
-		playsound(src, 'sound/machines/buzz-two.ogg', 50, TRUE)
-		src.on = 0
+		if(loc)
+			set_loc(loc)
+		else
+			set_loc(get_turf(src.possessed_thing))
+		possessed_thing.set_loc(src)
+
+		//Appearance Stuff
 		src.UpdateIcon()
+		src.desc = possessed_thing.desc
+		src.pixel_x = possessed_thing.pixel_x
+		src.pixel_y = possessed_thing.pixel_y
+		src.set_density(possessed_thing.density)
+		src.set_opacity(possessed_thing.opacity)
+		src.create_submerged_images()
+		src.flags = possessed_thing.flags
+		src.event_handler_flags = src.flags
+		//this is a mistake
+		src.bound_height = possessed_thing.bound_height
+		src.bound_width = possessed_thing.bound_width
+
+		//Relay these signals
+		RegisterSignal(src.possessed_thing, COMSIG_ATOM_POST_UPDATE_ICON, /atom/proc/UpdateIcon)
+
+		src.owner = controller
+		if (src.owner)
+			if (!src.owner.mind) //what the fuck
+				src.death(TRUE)
+				return
+			src.owner.set_loc(src)
+			src.owner.mind.transfer_to(src)
+
+		src.visible_message(SPAN_ALERT("<b>[src.possessed_thing] comes to life!</b>"))
+		animate_levitate(src, -1, 20, 1)
+		APPLY_ATOM_PROPERTY(src, PROP_MOB_STUN_RESIST_MAX, "living_object", 100)
+		APPLY_ATOM_PROPERTY(src, PROP_MOB_STUN_RESIST, "living_object", 100)
+
+		remove_lifeprocess(/datum/lifeprocess/blindness)
+		remove_lifeprocess(/datum/lifeprocess/blood)
+		remove_lifeprocess(/datum/lifeprocess/breath)
+		remove_lifeprocess(/datum/lifeprocess/radiation)
+
+	// Relay these procs
+
+	mouse_drop(atom/over_object, src_location, over_location, over_control, params)
+		. = ..()
+		src.possessed_thing?.MouseDrop(over_object, src_location, over_location, over_control, params)
+
+	MouseDrop_T(atom/dropped, mob/user)
+		. = ..()
+		dropped.MouseDrop(src.possessed_thing)
+
+	Bumped(atom/movable/AM)
+		. = ..()
+		src.possessed_thing?.Bumped(AM)
+
+	bump(atom/A)
+		. = ..()
+		src.possessed_thing?.Bump(A)
+
+	Cross(atom/movable/mover)
+		. = ..()
+		src.possessed_thing?.Cross(mover)
+
+	Crossed(atom/movable/AM)
+		. = ..()
+		src.possessed_thing?.Crossed(AM)
+
+
+	disposing()
+		REMOVE_ATOM_PROPERTY(src, PROP_MOB_STUN_RESIST, "living_object")
+		REMOVE_ATOM_PROPERTY(src, PROP_MOB_STUN_RESIST_MAX, "living_object")
+		..()
+
+	Exited(var/atom/movable/AM, var/atom/newloc)
+		if (AM == src.possessed_thing && newloc != src)
+			src.death(FALSE) //uh oh
+			boutput(src, SPAN_ALERT("You feel yourself being ripped away from this object!")) //no destroying spacetime
+
+	equipped()
+		if (src.possessed_item)
+			return src.possessed_item
+		else
+			return src.dummy
+
+	get_desc()
+		. = ..()
+		. += "[SPAN_ALERT("It seems to be alive.")]<br>"
+		if (src.health < src.max_health * 0.5)
+			. += SPAN_NOTICE("The ethereal grip on this object appears to be weakening.")
+
+	meteorhit(var/obj/O as obj)
+		src.death(TRUE)
+
+	updatehealth()
 		return
 
-	var/mob/living/carbon/human/H = src.occupant
-	if (src.cycle_current >= src.cycle_max) // cycle done! The cycle is faster if a human is inside
-		if (src.cycle == WASH) // we have to dry things now!
-			for (var/obj/item/I in src.contents)
-				if (istype(I, /obj/item/clothing))
-					var/obj/item/clothing/C = I
-					C.clean_stains()
-					C.add_stain(/datum/stain/damp)
-				I.clean_forensic()
-			if (src.occupant && ishuman(src.occupant))
-				H.sims?.affectMotive("Hygiene", 100)
-			src.cycle = DRY
-			src.cycle_current = 0
-			src.visible_message("[src] lets out a beep and hums as it switches to its drying cycle.")
-			playsound(src, 'sound/machines/chime.ogg', 30, TRUE)
-			playsound(src, 'sound/machines/engine_highpower.ogg', 20, TRUE)
-			src.UpdateIcon()
-		else // drying is done!
-			processing_items.Remove(src)
-			for (var/obj/item/item in src.contents)
-				if (istype(item, /obj/item/clothing))
-					var/obj/item/clothing/clothing = item
-					clothing.clean_stains()
-					clothing.delStatus("freshly_laundered") // ...and this is the price we pay for being cheeky
-					clothing.changeStatus("freshly_laundered", rand(2,4) MINUTES)
-					clothing.UpdateName()
-				else if (istype(item, /obj/item/currency/spacecash))
-					var/obj/item/currency/spacecash/cash = item
-					cash.changeStatus("freshly_laundered", INFINITE_STATUS)
-					var/list/amounts = random_split(cash.amount, min(rand(3,6), cash.amount - 1))
-					for (var/amount in amounts)
-						if (amount >= cash.amount)
-							break
-						var/obj/item/currency/spacecash/newcash = cash.split_stack(amount)
-						newcash.changeStatus("freshly_laundered", INFINITE_STATUS)
-						newcash.set_loc(src)
-					//Money laundering is a crime!
-					var/mob/living/carbon/human/criminal = src.activator
-					if(criminal)
-						criminal.apply_automated_arrest("Money laundering.")
-			src.activator = null
-			src.cycle = POST
-			src.cycle_current = 0
-			src.visible_message("[src] lets out a happy beep!")
-			playsound(src, 'sound/machines/ding.ogg', 50, TRUE)
-			if(src.occupant) // If someone is inside we eject immediatly so as to not keep people hostage
-				if (ishuman(src.occupant))
-					H.w_uniform?.changeStatus("freshly_laundered", rand(2,4) MINUTES)
-					H.wear_suit?.changeStatus("freshly_laundered", rand(2,4) MINUTES)
-					H.shoes?.changeStatus("freshly_laundered", rand(2,4) MINUTES)
-					H.gloves?.changeStatus("freshly_laundered", rand(2,4) MINUTES)
-					H.glasses?.changeStatus("freshly_laundered", rand(2,4) MINUTES)
-					H.head?.changeStatus("freshly_laundered", rand(2,4) MINUTES)
-				H.changeStatus("knockdown", 1 SECONDS)
-				H.make_dizzy(15) //Makes you dizzy for fifteen seconds due to the spinning
-				H.change_misstep_chance(65)
-				src.open = 1
-				src.unload()
-				src.cycle = PRE
-				src.visible_message("[src]'s door flings open and [H] flops on the ground, squeaky clean.")
-			src.occupant = null
-			src.cycle_max = CYCLE_TIME
-			src.on = 0
-			src.UpdateIcon()
-	else
-		src.cycle_current++
-		if (src.occupant)
-			H.TakeDamage("All", 2, 0, 0, DAMAGE_BLUNT) //Getting washed like that has gotta hurt
-			if (src.has_brick && prob(80))
-				boutput(H, SPAN_ALERT("The brick flies around and hits you in the head, <b>OWW!</b>"))
-				H.TakeDamage("Head", /obj/item/brick::force, 0, 0, DAMAGE_BLUNT)
-			H.take_oxygen_deprivation(rand(0,3)) //Hard to keep breathing while in the machine
-			src.shake()
-			playsound(src, 'sound/impact_sounds/Metal_Hit_Heavy_1.ogg', 50, TRUE)
-			if (src.cycle_current == 2 && src.cycle == WASH)
-				src.visible_message("[src] groans horribly, some water drips out!")
-				playsound(src, 'sound/impact_sounds/Metal_Clang_3.ogg', 80, TRUE)
-			else if (src.cycle_current == 4 && src.cycle == WASH)
-				src.visible_message("[src] is making a horrible ratchet! [H]'s face can be seen pressed against the glass.")
-				if(isliving(H))
-					H.emote("scream")
-			else if (src.cycle_current == 2 && src.cycle == DRY)
-				src.visible_message("[src] is shaking around threateningly!")
-				if(isliving(H))
-					H.emote("scream")
-			else if (src.cycle_current == 4 && src.cycle == DRY)
-				src.visible_message("[src] is quaking like a jackhammer!")
+	is_spacefaring()
+		// Let's just say it's powered by ethereal bullshit like ghost farts.
+		return TRUE
 
-		if (src.cycle == PRE) // just started up!
-			src.cycle = WASH
-			if (src.occupant)
-				src.visible_message("[src] clicks locked, grumps a bit and starts its washing cycle.")
-				H.clean_forensic()
-				H.delStatus("marker_painted")
-			else
-				src.visible_message("[src] clicks locked and sloshes a bit as it starts its washing cycle.")
-			if (locate(/obj/item/brick) in src.contents)
-				src.start_brick_grump()
-			playsound(src, 'sound/machines/click.ogg', 50, TRUE)
-			playsound(src, 'sound/machines/washing_start.ogg', 80, TRUE)
-			src.UpdateIcon()
+	clamp_values()
+		delStatus("slowed")
+		sleeping = 0
+		change_misstep_chance(-INFINITY)
+		src.delStatus("drowsy")
+		dizziness = 0
+		is_dizzy = FALSE
+		jitteriness = 0
+		is_jittery = FALSE
 
-		else if (src.cycle == WASH && prob(40)) // play a washery sound
-			H?.delStatus("burning")
-			playsound(src, 'sound/impact_sounds/Liquid_Slosh_2.ogg', 80, TRUE)
-			src.shake()
-		else if (src.cycle == DRY && prob(20)) // play a dryery sound
-			playsound(src, 'sound/machines/engine_highpower.ogg', 20, TRUE)
-			src.shake()
 
-/obj/submachine/laundry_machine/proc/start_brick_grump()
-	set waitfor = FALSE
-	src.has_brick = TRUE
-	while (src.cycle == WASH || src.cycle == DRY)
-		animate_storage_thump(src, 11)
-		if (prob(50))
-			var/dir = pick(cardinal)
-			for (var/mob/living/M in get_step(src, dir))
-				if (!isintangible(M))
-					random_brute_damage(M, 5)
-					M.setStatus("knockdown", 2 SECONDS)
-					M.force_laydown_standup()
-					M.throw_at(get_steps(src, dir, 5), 5, 1, null, get_turf(src))
-			step(src, dir)
-			src.visible_message(SPAN_ALERT("[src] [pick("rattles", "shudders", "judders", "complains", "grumps")]"), group = "angry_laundry")
-		if (prob(1))
-			if (prob(20))
-				src.unload(get_turf(src))
-				src.blowthefuckup()
-			else
-				src.visible_message(SPAN_ALERT("Everything flies out of [src]!"))
-				src.unload(get_step(src, src.dir), fling = TRUE)
-				src.on = FALSE
-				src.open = TRUE
-				src.process()
-			src.has_brick = FALSE
-			break
-		sleep(0.5 SECOND)
+	bullet_act(var/obj/projectile/P)
+		var/damage = 0
+		damage = round((P.power*P.proj_data.ks_ratio), 1.0)
 
-/obj/submachine/laundry_machine/proc/shake(var/amt = 5)
-	set waitfor = 0
-	var/orig_x = src.pixel_x
-	var/orig_y = src.pixel_y
-	for (amt, amt>0, amt--)
-		src.pixel_x = rand(-2,2)
-		src.pixel_y = rand(-2,2)
-		sleep(0.1 SECONDS)
-	src.pixel_x = orig_x
-	src.pixel_y = orig_y
+		switch (P.proj_data.damage_type)
+			if (D_KINETIC)
+				src.TakeDamage(null, damage, 0)
+			if (D_PIERCING)
+				src.TakeDamage(null, damage / 2, 0)
+			if (D_SLASHING)
+				src.TakeDamage(null, damage, 0)
+			if (D_BURNING)
+				src.TakeDamage(null, 0, damage)
+			if (D_ENERGY)
+				src.TakeDamage(null, 0, damage)
+
+		if(!P.proj_data.no_hit_message)
+			boutput(src, SPAN_ALERT("You are hit by the [P]!"))
+
+	blob_act(var/power)
+		logTheThing(LOG_COMBAT, src, "is hit by a blob")
+		if (isdead(src) || src.nodamage)
+			return
+
+		var/modifier = power / 20
+		var/damage = rand(modifier, 12 + 8 * modifier)
+
+		src.TakeDamage(null, damage, 0)
+
+		src.show_message(SPAN_ALERT("The blob attacks you!"))
+
+	attack_hand(mob/user)
+		if (user.a_intent == "help")
+			user.visible_message(SPAN_ALERT("[user] pets [src]!"))
+		else
+			..()
+
+	TakeDamage(zone, brute, burn, tox, damage_type, disallow_limb_loss)
+		health -= burn
+		health -= brute
+		health = min(max_health, health)
+		if (src.health <= 0)
+			src.death(FALSE)
+
+	HealDamage(zone, brute, burn)
+		TakeDamage(zone, -brute, -burn)
+
+	change_eye_blurry(var/amount, var/cap = 0)
+		if (amount < 0)
+			return ..()
+		else
+			return 1
+
+	take_eye_damage(var/amount, var/tempblind = 0)
+		if (amount < 0)
+			return ..()
+		else
+			return 1
+
+	take_ear_damage(var/amount, var/tempdeaf = 0)
+		if (amount < 0)
+			return ..()
+		else
+			return 1
+
+	click(atom/target, params)
+		if (target == src)
+			src.self_interact()
+		else
+			. = ..()
+
+	proc/self_interact()
+		if (src.possessed_item)
+			src.possessed_item.AttackSelf(src)
+		else
+			src.possessed_thing.Attackhand(src)
+		//To reflect updates of the items appearance etc caused by interactions.
+		src.update_density()
+		src.item_position_check()
+
+	death(gibbed)
+
+		if (src.possessed_thing && !gibbed)
+			src.possessed_thing.set_dir(src.dir)
+			if (src.possessed_thing.loc == src)
+				src.possessed_thing.set_loc(get_turf(src))
+			if (src.possessed_item)
+				possessed_item.cant_drop = initial(possessed_item.cant_drop)
+			qdel(src.dummy)
+
+		if (src.owner)
+			src.owner.set_loc(get_turf(src))
+			src.visible_message(SPAN_ALERT("<b>[src] is no longer possessed.</b>"))
+
+			if (src.mind)
+				mind.transfer_to(src.owner)
+			else if (src.client)
+				src.client.mob = src.owner
+			else if (src.key) //This can be null in situations where owner.key is not!
+				src.owner.key = src.key
+		else
+			if(src.mind || src.client)
+				var/mob/dead/observer/O = new/mob/dead/observer(src)
+				O.set_loc(get_turf(src))
+				if (isrestrictedz(src.z) && !restricted_z_allowed(src, get_turf(src)) && !(src.client && src.client.holder))
+					var/OS = pick_landmark(LANDMARK_OBSERVER, locate(1, 1, 1))
+					if (OS)
+						O.set_loc(OS)
+					else
+						O.z = Z_LEVEL_STATION
+				if (src.client)
+					src.client.mob = O
+				O.name = src.name
+				O.real_name = src.real_name
+				if (src.mind)
+					src.mind.transfer_to(O)
+
+		playsound(src.loc, 'sound/voice/wraith/wraithleaveobject.ogg', 40, 1, -1, 0.6)
+
+		for (var/atom/movable/AM in src.contents)
+			AM.set_loc(src.loc)
+
+		if (gibbed)
+			qdel(src.possessed_thing)
+
+		src.owner = null
+		src.possessed_thing = null
+		qdel(src)
+		..()
+
+	movement_delay()
+		return 4 + movement_delay_modifier
+
+	item_attack_message(var/mob/T, var/obj/item/S, var/d_zone)
+		if (d_zone)
+			return SPAN_ALERT("<B>[src] attacks [T] in the [d_zone]!</B>")
+		else
+			return SPAN_ALERT("<B>[src] attacks [T]!</B>")
+
+	return_air(direct = FALSE)
+		if (!direct)
+			return loc?.return_air()
+
+	assume_air(datum/air_group/giver)
+		return loc?.assume_air(giver)
+
+	can_strip()
+		return FALSE
+
+	update_icon()
+		..()
+		src.appearance = src.possessed_thing.appearance
+		src.name = "[name_prefix][src.possessed_thing.name]"
+		src.real_name = src.name
+
+	///Ensure the item is still inside us. If it isn't, die and return false. Otherwise, return true.
+	proc/item_position_check()
+		if (!src.possessed_thing || src.possessed_thing.loc != src) //item somewhere else? we no longer exist
+			boutput(src, SPAN_ALERT("You feel yourself being ripped away from this object!"))
+			src.death(FALSE)
+			return FALSE
+		return TRUE
+
+	///Update the density of ourselves
+	proc/update_density()
+		src.density = src.possessed_thing.density
+
+	get_hud()
+		return src.hud
+
+/mob/living/object/proc/specific_emotes(var/act, var/param = null, var/voluntary = 0)
+	return null
+
+/mob/living/object/proc/specific_emote_type(var/act)
 	return 1
 
-/obj/submachine/laundry_machine/attackby(obj/item/W, mob/user)
-	if (istype(W))
-		if (!src.open)
-			src.visible_message("[user] tries to put [W] into [src], but [src]'s door is closed, so [he_or_she(user)] just smooshes [W] against the door.[prob(40) ? " What a doofus!" : null]")
-			return
-		else if ((!istype(W, /obj/item/clothing) || !istype(W, /obj/item/grab)) && W.w_class > W_CLASS_HUGE)
-			src.visible_message("[user] tries [his_or_her(user)] best to put [W] into [src], but [W] is too big to fit!")
-			return
-		else if (length(src.contents) >= src.load_max)
-			src.visible_message("[user] tries [his_or_her(user)] best to put [W] into [src], but [src] is too full!")
-			return
-		else if (W.cant_drop || W.cant_self_remove)
-			src.visible_message("[user] tries [his_or_her(user)] best to put [W] into [src], but [W] is stuck to [him_or_her(user)]!")
-			return
-		else
-			if (istype(W, /obj/item/clothing) || istype(W, /obj/item/currency/spacecash) || istype(W, /obj/item/brick))
-				user.u_equip(W)
-				W.set_loc(src)
-				src.visible_message("[user] puts [W] into [src].")
-				src.UpdateIcon()
-				return
-			else if (istype(W, /obj/item/grab)) //If its a person, we're trying to stuff them into the washing machine
-				var/obj/item/grab/G = W
-				user.visible_message(SPAN_ALERT("[user] starts to put [G.affecting] into the washing machine!"))
-				SETUP_GENERIC_ACTIONBAR(user, src, 4 SECONDS, /obj/submachine/laundry_machine/proc/force_into_machine, list(G, user), 'icons/mob/screen1.dmi', "grabbed", null, null) //Sounds about right since it's a lengthy stun afterwards
-	else
-		return ..()
+/mob/living/object/emote(var/act, var/voluntary = 0)
+	..()
+	var/param = null
+	if (src.hasStatus("paralysis"))
+		return //aaaa
+	if (findtext(act, " ", 1, null))
+		var/t1 = findtext(act, " ", 1, null)
+		param = copytext(act, t1 + 1, length(act) + 1)
+		act = copytext(act, 1, t1)
 
-/obj/submachine/laundry_machine/hitby(atom/movable/MO, datum/thrown_thing/thr)
-	if (istype(MO, /mob/living))
-		if (src.open)
-			var/mob/living/M = MO
-			M.visible_message(SPAN_ALERT("<B>[M] gets tossed into the washing machine!</B>"))
-			logTheThing(LOG_COMBAT, M, "is thrown into a [src.name] at [log_loc(src)].")
-			M.set_loc(src)
-			M.changeStatus("knockdown", 1.5 SECONDS)
-			src.occupant = M
-			src.open = 0
-			src.cycle = PRE
-			cycle_max = CYCLE_TIME_MOB_INSIDE
-			if (!processing_items.Find(src))
-				processing_items.Add(src)
-			UpdateIcon()
-	else
-		return ..()
+	var/maptext_out = 0
+	var/message = specific_emotes(act, param, voluntary)
+	var/m_type = specific_emote_type(act)
+	var/custom = 0 //Sorry, gotta make this for chat groupings.
 
-/obj/submachine/laundry_machine/relaymove(mob/user as mob)
-	if (src.occupant == user && !src.on)
-		if (!can_act(user))
-			return
-		user.set_loc(src.loc)
-		src.occupant = null
-		src.open = 1
-		src.UpdateIcon()
-		cycle_max = CYCLE_TIME
-		playsound(src, 'sound/machines/click.ogg', 50)
 
-/obj/submachine/laundry_machine/attack_hand(mob/user)
-	if (!can_act(user))
+	if (!message)
+		switch (lowertext(act))
+			if ("salute","bow","hug","wave","glare","stare","look","leer","nod")
+				if (src.emote_check(voluntary, 10))
+					// visible targeted emotes
+					if (!src.restrained())
+						var/M = null
+						if (param)
+							for (var/mob/A in view(null, null))
+								if (ckey(param) == ckey(A.name))
+									M = A
+									break
+						if (!M)
+							param = null
+
+						act = lowertext(act)
+						if (param)
+							switch(act)
+								if ("bow","wave","nod")
+									message = "<B>[src]</B> [act]s to [param]."
+									maptext_out = "<I>[act]s to [M]</I>"
+								if ("glare","stare","look","leer")
+									message = "<B>[src]</B> [act]s at [param]."
+									maptext_out = "<I>[act]s at [M]</I>"
+								else
+									message = "<B>[src]</B> [act]s [param]."
+									maptext_out = "<I>[act]s [M]</I>"
+						else
+							switch(act)
+								if ("hug")
+									message = "<B>[src]</b> [act]s itself."
+									maptext_out = "<I>[act]s itself</I>"
+								else
+									message = "<B>[src]</b> [act]s."
+									maptext_out = "<I>[act]s [M]</I>"
+					else
+						message = "<B>[src]</B> struggles to move."
+						maptext_out = "<I>[src] struggles to move</I>"
+					m_type = 1
+			if ("smile","grin","smirk","frown","scowl","grimace","sulk","pout","blink","nod","shrug","think","ponder","contemplate")
+				// basic visible single-word emotes
+				if (src.emote_check(voluntary, 10))
+					message = "<B>[src]</B> [act]s."
+					maptext_out = "<I>[act]s</I>"
+					m_type = 1
+			if ("gasp","cough","laugh","giggle","sigh")
+				// basic hearable single-word emotes
+				if (src.emote_check(voluntary, 10))
+					message = "<B>[src]</B> [act]s."
+					maptext_out = "<I>[act]s</I>"
+					m_type = 2
+			if ("customv")
+				if (!param)
+					param = input("Choose an emote to display.")
+					if(!param) return
+				param = html_encode(sanitize(param))
+				message = "<b>[src]</b> [param]"
+				maptext_out = "<I>[regex({"(&#34;.*?&#34;)"}, "g").Replace(param, "</i>$1<i>")]</I>"
+				custom = copytext(param, 1, 10)
+				m_type = 1
+			if ("customh")
+				if (!param)
+					param = input("Choose an emote to display.")
+					if(!param) return
+				param = html_encode(sanitize(param))
+				message = "<b>[src]</b> [param]"
+				maptext_out = "<I>[regex({"(&#34;.*?&#34;)"}, "g").Replace(param, "</i>$1<i>")]</I>"
+				custom = copytext(param, 1, 10)
+				m_type = 2
+			if ("me")
+				if (!param)
+					return
+				param = html_encode(sanitize(param))
+				message = "<b>[src]</b> [param]"
+				maptext_out = "<I>[regex({"(&#34;.*?&#34;)"}, "g").Replace(param, "</i>$1<i>")]</I>"
+				custom = copytext(param, 1, 10)
+				m_type = 1
+			if ("flip")
+				if (src.emote_check(voluntary, 50))
+					if (isobj(src.loc))
+						var/obj/container = src.loc
+						container.mob_flip_inside(src)
+					else
+						message = "<b>[src]</B> does a flip!"
+						animate_spin(src, pick("L", "R"), 1, 0)
+
+	if (!message)
 		return
-	src.add_fingerprint(user)
-	ui_interact(user)
 
-/obj/submachine/laundry_machine/proc/force_into_machine(obj/item/grab/W as obj, mob/user as mob)
-	if (src.on == 0)
-		if(W?.affecting && (BOUNDS_DIST(user, src) == 0))
-			user.visible_message(SPAN_ALERT("[user] shoves [W.affecting] into the laundry machine and turns it on!"))
-			src.add_fingerprint(user)
-			logTheThing(LOG_COMBAT, user, "forced [constructTarget(W.affecting,"combat")] into a laundry machine at [log_loc(src)].")
-			W.affecting.set_loc(src)
-			src.open = 0
-			src.on = 1
-			src.cycle = PRE
-			var/mob/M = W.affecting
-			src.occupant = M
-			UpdateIcon()
-			cycle_max = CYCLE_TIME_MOB_INSIDE
-			if (!processing_items.Find(src))
-				processing_items.Add(src)
-			var/mob/living/L = user
+	var/list/mob/recipients = list()
+	if (m_type & 1)
+		recipients = viewers(src, null)
 
-			if (L.pulling == W.affecting)
-				L.remove_pulling()
-			qdel(W)
-	else //Prevents stuffing more than one person in at a time
-		user.visible_message(SPAN_ALERT("[user] tries to shove [W.affecting] into the laundry machine but it was already running."))
+	else if (m_type & 2)
+		recipients = hearers(src, null)
 
-/obj/submachine/laundry_machine/mouse_drop(over_object,src_location,over_location)
-	var/mob/user = usr
-	if (!user || !over_object || BOUNDS_DIST(user, src) > 0 || BOUNDS_DIST(user, over_object) > 0 || is_incapacitated(user) || (issilicon(user) && BOUNDS_DIST(src, user) > 0))
-		return
-	if (src.on || !src.open)
-		src.visible_message("[user] tries to unload items from [src], but the door is closed!")
-		return
-	var/turf/T = get_turf(over_object)
-	if (!T)
-		return
-	src.visible_message("[user] unloads [src] onto [T].")
-	src.unload(T)
+	else if (!isturf(src.loc))
+		var/atom/A = src.loc
+		for (var/mob/M in A.contents)
+			recipients += M
 
-/obj/submachine/laundry_machine/proc/unload(var/turf/T, fling = FALSE)
-	if (src.contents.len)
-		T = istype(T) ?  T : get_turf(src)
-		for (var/atom/movable/AM in src)
-			AM.set_loc(T)
-			if (fling)
-				AM.throw_at(get_steps(src, src.dir, 5), 5, 2)
-		src.UpdateIcon()
+	log_emote(src, message, voluntary)
+	act = lowertext(act)
+	for (var/mob/M as anything in recipients)
+		M.show_message(SPAN_EMOTE("[message]"), m_type, group = "[src]_[act]_[custom]")
 
-/obj/submachine/laundry_machine/ui_interact(mob/user, datum/tgui/ui)
-	ui = tgui_process.try_update_ui(user, src, ui)
-	if (!ui)
-		ui = new(user, src, "Laundry")
-		ui.open()
+	if (maptext_out && !ON_COOLDOWN(src, "emote maptext", 0.5 SECONDS))
+		DISPLAY_MAPTEXT(src, recipients, MAPTEXT_MOB_RECIPIENTS_WITH_OBSERVERS, /image/maptext/emote, maptext_out)
 
-/obj/submachine/laundry_machine/ui_data(mob/user)
-  . = list(
-    "on" = on,
-    "door" = open,
-  )
 
-/obj/submachine/laundry_machine/ui_act(action, params, datum/tgui/ui)
+/mob/living/object/ai_controlled
+	is_npc = TRUE
+
+	New()
+		..()
+		src.ai = new /datum/aiHolder/living_object(src)
+
+	death(var/gibbed)
+		qdel(src.ai)
+		src.ai = null
+		..()
+
+
+// Extremely simple AI for living objects.
+// Essentially:
+// 1. Is there a person to hit? If yes, go hit the closest person. If no, wander around
+// 2. Repeat
+/datum/aiHolder/living_object
+	exclude_from_mobs_list = TRUE
+
+/datum/aiHolder/living_object/New()
+	..()
+	// THE LIVING OBJECT CYCLE
+	// THERE IS ONE STEP, AND IT IS ATTACK
+	var/datum/aiTask/timed/targeted/living_object/attack = get_instance(/datum/aiTask/timed/targeted/living_object, list(src))
+	default_task = attack
+
+/datum/aiHolder/living_object/was_harmed(obj/item/W, mob/M)
 	. = ..()
-	if (.)
+	if (!src.target)
+		src.target = M
+	src.current_task = default_task
+
+/datum/aiTask/timed/targeted/living_object
+	name = "attack"
+
+/datum/aiTask/timed/targeted/living_object/get_targets()
+	var/list/humans = list() // Only care about humans since that's all wraiths eat. TODO maybe borgs too?
+	for (var/mob/living/carbon/human/H in view(src.target_range, src.holder.owner))
+		if (src.valid_target(H))
+			humans += H
+	return humans
+
+/datum/aiTask/timed/targeted/living_object/proc/valid_target(mob/living/carbon/human/H)
+	return istype(H) && isalive(H) && !H.nodamage && !(FACTION_WRAITH in H.faction)
+
+
+/datum/aiTask/timed/targeted/living_object/evaluate() //always attack if we can see a person
+	return length(get_targets()) ? 999 : 0
+
+/datum/aiTask/timed/targeted/living_object/on_tick()
+	. = ..()
+	// see if we can find someone
+	var/mob/mobtarget = holder.target
+	if (!src.valid_target(mobtarget) || GET_DIST(holder.owner, mobtarget) > 10 || frustration > 8) //slightly higher chase range than acquisition range
+		holder.target = null
+		frustration = 0
+		var/list/possible = get_targets()
+		if (length(possible))
+			holder.target = pick(possible)
+	 // we didn't find anyone, wander around
+	if (!holder.target)
+		holder.owner.move_dir = pick(alldirs)
+		holder.owner.process_move()
 		return
-	switch(action)
-		if("door")
-			if (src.on)
-				src.visible_message("[usr] tries to open [src]'s door, but [src] is running and the door is locked!")
-				return
+	if (!GET_COOLDOWN(holder.owner, "livingobj_click_delay"))
+		src.pre_attack()
+	if (BOUNDS_DIST(holder.target, holder.owner))
+		holder.move_to(holder.target)
+	else
+		var/obj/item/equipped = holder.owner.equipped()
+		var/delay = max(holder.owner.combat_click_delay, equipped.click_delay)
+		if(!ON_COOLDOWN(holder.owner, "livingobj_click_delay", delay))
+			var/atom/movable/thing_to_attack = holder.target
+			if (isobj(thing_to_attack.loc))
+				thing_to_attack = thing_to_attack.loc
+			holder.owner.weapon_attack(thing_to_attack, holder.owner.equipped(), TRUE)
+
+/datum/aiTask/timed/targeted/living_object/frustration_check()
+	. = 0
+	if (holder)
+		if (!IN_RANGE(holder.owner, holder.target, target_range))
+			return 1
+
+		if (ismob(holder.target))
+			var/mob/M = holder.target
+			. = !(holder.target && isalive(M))
+		else
+			. = !(holder.target)
+
+/// For items with special intent/targeting requirements, or special modes of attacking- arm grenades, turn batons on, etc
+/datum/aiTask/timed/targeted/living_object/proc/pre_attack()
+	var/mob/living/object/spooker = holder.owner
+	var/obj/item/item = spooker.equipped()
+
+	if (!istype(item, /obj/item/attackdummy)) // marginally more performant- don't bother if we're a possessed non item
+		if (istype(item, /obj/item/baton))
+			var/obj/item/baton/bat = item
+			// they're down, hiding, or we're out of juice - let's harm baton
+			if (is_incapacitated(src.holder.target) || !isturf(src.holder.target.loc) || !(SEND_SIGNAL(bat, COMSIG_CELL_CHECK_CHARGE) & CELL_SUFFICIENT_CHARGE))
+				if (bat.is_active) // uh oh, we're on. turn off
+					spooker.self_interact()
+				if (spooker.intent != INTENT_HARM)
+					spooker.set_a_intent(INTENT_HARM)
+				bat.flipped = TRUE
+
+			else // they're up and we have charge, let's try to stun
+				if (!bat.is_active)
+					if (istype(bat, /obj/item/baton/ntso))
+						var/obj/item/baton/ntso/NTbat = bat
+						if (NTbat.state == EXTENDO_BATON_OPEN_AND_OFF) // need 2 taps to get to 'on' in this case
+							spooker.self_interact()
+					spooker.self_interact()
+
+				if (spooker.intent != INTENT_DISARM)
+					spooker.set_a_intent(INTENT_DISARM) // have charge, baton normally
+				bat.flipped = FALSE
+			bat.UpdateIcon()
+
+		else if (istype(item, /obj/item/sword))
+			var/obj/item/sword/saber = item
+			if (!saber.active)
+				spooker.self_interact() // turn that sword on
+			spooker.set_a_intent(INTENT_HARM)
+
+		else if (istype(item, /obj/item/gun))
+			//oough parallel inheritance moment
+			if (istype(item, /obj/item/gun/kinetic/pumpweapon))
+				var/obj/item/gun/kinetic/pumpweapon/pumpweapon = item
+				if (pumpweapon.pump_back)
+					item.AttackSelf(src.holder.owner)
+					//don't pump and shoot in the same AI tick
+					ON_COOLDOWN(holder.owner, "livingobj_click_delay", holder.owner.combat_click_delay)
+					return
+			else if (istype(item, /obj/item/gun/kinetic/single_action))
+				var/obj/item/gun/kinetic/single_action/single_action = item
+				if (!single_action.hammer_cocked)
+					item.AttackSelf(src.holder.owner)
+					ON_COOLDOWN(holder.owner, "livingobj_click_delay", holder.owner.combat_click_delay)
+					return
+			var/obj/item/gun/pew = item
+			if (pew.canshoot(holder.owner))
+				spooker.set_a_intent(INTENT_HARM) // we can shoot, so... shoot
 			else
-				src.open = !src.open
-				. = TRUE
-				src.visible_message("[usr] [src.open ? "opens" : "closes"] [src]'s door.")
-				if (src.open)
-					src.unload()
-					src.cycle = PRE
-		if("cycle")
-			if (src.occupant)
-				src.cycle_max = CYCLE_TIME_MOB_INSIDE
-			src.on = !src.on
-			. = TRUE
-			src.visible_message("[usr] switches [src] [src.on ? "on" : "off"].")
-			src.activator = usr
-			if (src.on)
-				src.cycle = PRE
-				src.open = 0
-				if (!(src in processing_items))
-					processing_items.Add(src)
-	src.UpdateIcon()
+				spooker.set_a_intent(INTENT_HELP) // otherwise go on help for gun whipping
 
-/obj/submachine/laundry_machine/Click(location, control, params)
-	if(!src.ghost_observe_occupant(usr, src.occupant))
-		. = ..()
+		else if (istype(item, /obj/item/old_grenade) || istype(item, /obj/item/chem_grenade || istype(item, /obj/item/pipebomb))) //cool paths tHANKS
+			spooker.self_interact() // arm grenades
 
-#undef PRE
-#undef WASH
-#undef DRY
-#undef POST
+		else if (istype(item, /obj/item/swords)) 		// this will also apply for non-limb-slicey katanas but it shouldn't really matter
+			if (ishuman(holder.target))
+				var/mob/living/carbon/human/H = holder.target
+				var/limbless = TRUE
+				for (var/limb in list("l_leg", "r_leg", "l_arm", "r_arm"))
+					if (H.limbs.vars[limb]) // sue me
+						spooker.zone_sel.select_zone(limb)
+						limbless = FALSE
+						break
+				if (limbless) // >:^)
+					spooker.zone_sel.select_zone("head")
+
+		else if (istype(item, /obj/item/weldingtool))
+			var/obj/item/weldingtool/welder = item
+			if (!welder.welding)
+				spooker.self_interact()
+
+		else if (istype(item, /obj/item/device/transfer_valve))
+			var/obj/item/device/transfer_valve/TTV = item
+			if (!TTV.valve_open)
+				TTV.toggle_valve() // boom
+
+		else if (istype(item, /obj/item/saw))
+			var/obj/item/saw/chainsaw = item
+			if (!chainsaw.active)
+				spooker.self_interact() // activate chainsaw for sawing
+
+		else
+			spooker.set_a_intent(INTENT_HARM)
+			spooker.zone_sel.select_zone("head") // head for plates n stuff
+
+	//TODO make guns fire at range?, c saber deflect (if possible i forget if arbitrary mobs can block)
